@@ -1,0 +1,21 @@
+# Git Portable Manager — .gitignore
+# UA: Файли що НЕ публікуються в GitHub
+
+# Секрети та конфігурація
+.env
+
+# Python кеш
+__pycache__/
+*.pyc
+*.pyo
+
+# Логи
+*.log
+
+# Резервні копії та архіви
+*.7z
+*.zip
+*.bak
+
+# Тимчасові файли
+*.tmp
