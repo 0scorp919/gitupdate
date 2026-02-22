@@ -19,3 +19,7 @@ __pycache__/
 
 # Тимчасові файли
 *.tmp
+ 
+# Publish helper (local only) 
+_publish.bat 
+_cleanup.bat 
