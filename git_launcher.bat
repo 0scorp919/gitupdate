@@ -1,64 +1,80 @@
 ﻿@echo off
+:: UA: Встановлюємо кодування UTF-8 для коректного відображення кирилиці
+chcp 65001 >nul
+setlocal
+
 :: ============================================================
-:: Git Portable Manager — GitHub-ready Launcher
+:: GIT PORTABLE MANAGER — GitHub-ready Launcher
 :: UA: Портативний лаунчер для публікації проекту на GitHub.
 ::     Auto-detect CAPSULE_ROOT від %~dp0 (два рівні вгору).
 ::     Без хардкодованих шляхів — працює з будь-якого розташування.
 :: ============================================================
 
-setlocal EnableDelayedExpansion
+:: --- 1. ПЕРЕВІРКА ПРАВ АДМІНІСТРАТОРА ---
+NET SESSION >nul 2>&1
+if %errorLevel% neq 0 (
+    echo [INFO] Запит прав адміністратора...
+    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    exit /b
+)
 
-:: --- 1. AUTO-DETECT CAPSULE ROOT ---
-:: UA: %~dp0 = папка цього .bat файлу (gitupdate\)
-::     Два рівні вгору: gitupdate\ → devops\ → CAPSULE_ROOT\
-set "SCRIPT_DIR=%~dp0"
-set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-for %%A in ("%SCRIPT_DIR%\..") do set "DEVOPS_DIR=%%~fA"
+:: --- 2. AUTO-DETECT CAPSULE ROOT ---
+set "LAUNCHER_DIR=%~dp0"
+if "%LAUNCHER_DIR:~-1%"=="\" set "LAUNCHER_DIR=%LAUNCHER_DIR:~0,-1%"
+
+for %%A in ("%LAUNCHER_DIR%\..") do set "DEVOPS_DIR=%%~fA"
 for %%A in ("%DEVOPS_DIR%\..") do set "CAPSULE_ROOT=%%~fA"
 
-echo [INFO] Capsule: %CAPSULE_ROOT%
+:: --- 3. PYTHON EXE ---
+set "PYTHON_EXE=%CAPSULE_ROOT%\apps\python\current\python\python.exe"
+if not exist "%PYTHON_EXE%" (
+    where python >nul 2>&1
+    if %errorlevel% equ 0 (
+        set "PYTHON_EXE=python"
+    ) else (
+        echo [CRITICAL ERROR] Python not found at:
+        echo   %PYTHON_EXE%
+        echo.
+        echo [HINT] Переконайся що Python встановлено у:
+        echo   %CAPSULE_ROOT%\apps\python\current\python\
+        echo   Запусти: Win+R -^> python
+        pause
+        exit /b 1
+    )
+)
 
-:: --- 2. PYTHON EXE ---
-set "PYTHON_EXE="
-for /d %%D in ("%CAPSULE_ROOT%\apps\python\current\python-*") do (
-    if exist "%%D\python.exe" set "PYTHON_EXE=%%D\python.exe"
-)
-if not defined PYTHON_EXE (
-    where python >nul 2>&1 && set "PYTHON_EXE=python"
-)
-if not defined PYTHON_EXE (
-    echo [ERROR] Python не знайдено. Встанови Python або запусти Win+R ^> python
-    pause
-    exit /b 1
-)
+:: --- 4. SCRIPT PATH ---
+set "MANAGER=%LAUNCHER_DIR%\git_manager.py"
 
-:: --- 3. SCRIPT PATH ---
-set "MANAGER=%SCRIPT_DIR%\git_manager.py"
+:: --- 5. ВІЗУАЛІЗАЦІЯ ---
+echo ========================================================
+echo   GIT PORTABLE MANAGER (Admin Mode)
+echo   (c) Oleksii Rovnianskyi System
+echo   Root: %CAPSULE_ROOT%
+echo ========================================================
+
+:: --- 6. ПЕРЕВІРКА СКРИПТА ---
 if not exist "%MANAGER%" (
-    echo [ERROR] git_manager.py не знайдено: %MANAGER%
+    echo [CRITICAL ERROR] Script not found at:
+    echo   %MANAGER%
     pause
     exit /b 1
 )
 
-:: --- 4. UAC ELEVATION ---
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [INFO] Запит прав адміністратора...
-    powershell -NoProfile -Command ^
-        "Start-Process cmd -Verb RunAs -ArgumentList '/c cd /d ""%CAPSULE_ROOT%"" && ""%PYTHON_EXE%"" ""%MANAGER%"" %*'"
-    exit /b 0
-)
-
-:: --- 5. RUN MANAGER ---
-echo [INFO] GIT PORTABLE MANAGER (Admin Mode)
+:: --- 7. ЗАПУСК СКРИПТА ---
+echo [INFO] Запуск Python скрипта...
 cd /d "%CAPSULE_ROOT%"
 "%PYTHON_EXE%" "%MANAGER%" %*
-if %errorlevel% neq 0 (
-    echo [ERROR] git_manager.py завершився з помилкою (code %errorlevel%).
+
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [ERROR] Скрипт завершився з помилкою %ERRORLEVEL%.
+    echo Перевір лог-файл у: %CAPSULE_ROOT%\logs\gitlog\
     pause
-    exit /b %errorlevel%
+) else (
+    echo.
+    echo [OK] Успішно завершено.
 )
 
-echo [OK] Успішно завершено.
 endlocal
 exit /b 0
