@@ -62,25 +62,30 @@ SSH_CONFIG   = os.path.join(GIT_DIR, ".ssh", "config")
 SSH_KEY_MAIN = os.path.join(GIT_DIR, ".ssh", "id_ed25519_main")
 SSH_KEY_SECURITY = os.path.join(GIT_DIR, ".ssh", "id_ed25519_security")
 
-# Репозиторії для синхронізації (--sync)
-REPOS = [
-    {"name": "capsule-core",  "local": ".",                 "account": "main"},
-    {"name": "second-brain",  "local": "second-brain",      "account": "main"},
-    {"name": "7zipupdate",    "local": "devops/7zipupdate", "account": "security"},
-    {"name": "binupdate",     "local": "devops/binupdate",  "account": "security"},
-    {"name": "changelogupdate","local": "devops/changelogupdate","account": "security"},
-    {"name": "gitupdate",     "local": "devops/gitupdate",  "account": "security"},
-    {"name": "chromeupdate",  "local": "devops/chromeupdate", "account": "security"},
-    {"name": "doublecmdupdate","local": "devops/doublecmdupdate","account": "security"},
-    {"name": "nodeupdate",    "local": "devops/nodeupdate",   "account": "security"},
-    {"name": "obsidianupdate","local": "devops/obsidianupdate","account": "security"},
-    {"name": "pathupdate",    "local": "devops/pathupdate",   "account": "security"},
-    {"name": "pwshupdate",    "local": "devops/pwshupdate",   "account": "security"},
-    {"name": "pythonupdate",  "local": "devops/pythonupdate", "account": "security"},
-    {"name": "rdpupdate",     "local": "devops/rdpupdate",    "account": "security"},
-    {"name": "telegramupdate","local": "devops/telegramupdate","account": "security"},
-    {"name": "vsupdate",      "local": "devops/vsupdate",     "account": "security"},
-]
+def load_sync_repos() -> list[dict]:
+    """Parse SYNC_REPO_XX entries from .env.
+    UA: Парсить записи SYNC_REPO_XX з .env для динамічного списку синхронізації."""
+    repos = []
+    env_vars = _parse_env_file()
+    # UA: Шукаємо ключі, що починаються з SYNC_REPO_
+    keys = sorted([k for k in env_vars.keys() if k.startswith("SYNC_REPO_")])
+    for k in keys:
+        val = env_vars[k]
+        try:
+            # UA: Формат: name:path:account
+            parts = val.split(":")
+            if len(parts) >= 3:
+                repos.append({
+                    "name":    parts[0].strip(),
+                    "local":   parts[1].strip(),
+                    "account": parts[2].strip()
+                })
+        except Exception:
+            continue
+    return repos
+
+# Репозиторії будуть завантажені динамічно у main() або sync_repos()
+REPOS = []
 
 PRESERVE_PATHS = [".ssh", r"etc\gitconfig"]
 
@@ -287,6 +292,12 @@ def sync_repo(repo: dict, max_retries: int = 3) -> bool:
         os.chdir(orig_dir)
 
 def sync_repos() -> None:
+    global REPOS
+    REPOS = load_sync_repos()
+    if not REPOS:
+        log("⚠️ Список репозиторіїв порожній. Перевір SYNC_REPO_XX у .env", Colors.YELLOW)
+        return
+
     cprint("-" * 50, Colors.BLUE)
     log("🔄 ГІТ СИНХРОНІЗАЦІЯ КАПСУЛИ", Colors.HEADER)
     success_count = 0
