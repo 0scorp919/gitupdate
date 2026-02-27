@@ -266,19 +266,23 @@ def sync_repo(repo: dict, max_retries: int = 3) -> bool:
 
     log(f"🔄 Синхронізація '{name}' ({account})...", Colors.CYAN)
     orig_dir = os.getcwd()
+    # UA: Вимикаємо credential helper та примушуємо використовувати SSH, щоб уникнути GUI вікон
+    base_cmd = [GIT_BIN, "-c", "credential.helper=", "-c", f"core.sshCommand={ssh_cmd}"]
+
     try:
         os.chdir(local_path)
-        status = subprocess.run([GIT_BIN, "status", "--porcelain"], capture_output=True, text=True, timeout=30)
+        status = subprocess.run(base_cmd + ["status", "--porcelain"], capture_output=True, text=True, timeout=30)
         if not status.stdout.strip():
             log(f"   ✅ '{name}' — немає змін", Colors.GREEN)
             return True
 
-        subprocess.run([GIT_BIN, "add", "."], capture_output=True, env=env)
+        subprocess.run(base_cmd + ["add", "."], capture_output=True, env=env)
         commit_msg = f"Auto-sync {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        subprocess.run([GIT_BIN, "commit", "-m", commit_msg], capture_output=True, env=env)
+        subprocess.run(base_cmd + ["commit", "-m", commit_msg], capture_output=True, env=env)
 
         for attempt in range(max_retries):
-            push = subprocess.run([GIT_BIN, "push"], capture_output=True, text=True, env=env, timeout=120)
+            # UA: Використовуємо base_cmd для push, що гарантує відсутність інтерактивних вікон
+            push = subprocess.run(base_cmd + ["push"], capture_output=True, text=True, env=env, timeout=120)
             if push.returncode == 0:
                 log(f"   ✅ '{name}' — push успішний", Colors.GREEN)
                 return True
