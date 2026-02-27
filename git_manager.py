@@ -177,11 +177,20 @@ def sync_repo(repo: dict, max_retries: int = 3) -> bool:
         log(f"   ❌ Репозиторій '{name}' не існує: {local_path}", Colors.RED); return False
 
     ssh_key = SSH_KEY_MAIN if account == "main" else SSH_KEY_SECURITY
+    ssh_host = "github.com" if account == "main" else "github-security"
     ssh_cmd = f'"{SSH_BIN}" -i "{ssh_key}" -F "{SSH_CONFIG}" -o StrictHostKeyChecking=no -o BatchMode=yes'
     env = {**os.environ, "GIT_SSH_COMMAND": ssh_cmd}
 
     # UA: Вимикаємо credential helper та примушуємо SSH, щоб уникнути GUI вікон
-    base_cmd = [GIT_BIN, "-c", "credential.helper=", "-c", f"core.sshCommand={ssh_cmd}"]
+    # UA: Вимикаємо credential helper та примушуємо SSH, щоб уникнути GUI вікон
+    # Додатково встановлюємо url.ssh://git@github.com/.insteadOf для примусового SSH
+    base_cmd = [
+        GIT_BIN,
+        "-c", "credential.helper=",
+        "-c", f"core.sshCommand={ssh_cmd}",
+        "-c", f"url.git@{ssh_host}:.insteadOf=https://github.com/",
+        "-c", f"url.git@{ssh_host}:.insteadOf=git@github.com:"
+    ]
 
     log(f"🔄 Синхронізація '{name}' ({account})...", Colors.CYAN)
     orig_dir = os.getcwd()
