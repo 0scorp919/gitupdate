@@ -394,9 +394,11 @@ def extract_ssh_keys_from_vaultwarden(token: str, env: dict) -> bool:
             for f in item.get("fields", []):
                 if f.get("name") == "SSH": key_val = f.get("value")
             if key_val:
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(key_val.replace("\\n", "\n") if "\\n" in key_val else key_val)
-                    if not key_val.endswith("\n"): f.write("\n")
+                with open(path, "w", encoding="utf-8", newline="\n") as f:
+                    content = key_val.replace("\\n", "\n") if "\\n" in key_val else key_val
+                    content = content.replace("\r\n", "\n").replace("\r", "\n")
+                    if not content.endswith("\n"): content += "\n"
+                    f.write(content)
                 log(f"   🔑 SSH ключ {name} завантажено.", Colors.GREEN)
             else:
                 log(f"   ⚠️ Не знайдено поле 'SSH' у записі {name}.", Colors.YELLOW); success = False
