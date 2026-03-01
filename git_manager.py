@@ -7,10 +7,11 @@ UA: Менеджер Git — оновлення, бекап та АВТО-СИН
     Об'єднано функціонал gitupdate та gitsyncupdate.
 
 CHANGELOG:
-    v1.8 (2026-02-27) — Інтеграція gitsyncupdate:
+    v1.8 (2026-02-27) — Інтеграція gitsyncupdate та оптимізація:
            Додано функції sync_repo() та sync_repos() для авто-push.
+           Впроваджено url.insteadOf для примусового SSH (фікс помилки /dev/tty).
            Додано CLI аргумент --sync для швидкої синхронізації.
-           Уніфіковано REPOS конфігурацію для капсули.
+           Уніфіковано REPOS конфігурацію, об'єднано лаунчери (launcher.bat v2.0).
     v1.7 (2026-02-27) — Стандартизація до manager_standard v3.2:
            Впроваджено AutoCloseTimer (30 сек бездіяльності), оновлено logging.
            Впроваджено health_check(), error_reporting(), network_request_with_retry().
@@ -26,7 +27,7 @@ from typing import Optional
 # ===========================================================================
 # VERSION
 # ===========================================================================
-__version__ = "1.8"
+__version__ = "1.9"
 
 def get_manager_hash() -> str:
     """Return first 12 chars of SHA256 of this script (self-integrity check)."""
@@ -161,8 +162,16 @@ def draw_progress(label: str, percent: int, width: int = 20) -> None:
     sys.stdout.write(f"\r{Colors.YELLOW}{label}: [{bar}] {percent}%{Colors.RESET}"); sys.stdout.flush()
 
 def health_check() -> dict:
-    checks = {"7zip": os.path.exists(ZIP_EXE), "git": os.path.exists(GIT_BIN), "ssh": os.path.exists(SSH_BIN), "log_dir": os.path.exists(LOG_DIR), "capsule_root": os.path.exists(CAPSULE_ROOT)}
+    free_space_gb = 0.0
+    try:
+        total, used, free = shutil.disk_usage(CAPSULE_ROOT)
+        free_space_gb = free / (1024**3)
+    except Exception:
+        pass
+
+    checks = {"7zip": os.path.exists(ZIP_EXE), "git": os.path.exists(GIT_BIN), "log_dir": os.path.exists(LOG_DIR), "capsule_root": os.path.exists(CAPSULE_ROOT), "disk_space": free_space_gb >= 5.0}
     if not checks["7zip"]: log("⚠️ 7-Zip не знайдено!", Colors.YELLOW)
+    if not checks["disk_space"]: log(f"❌ Критично мало місця на диску! Вільно: {free_space_gb:.1f} GB (мінімум 5.0 GB)", Colors.RED)
     return checks
 
 def error_reporting(error: Exception, context: str = "") -> None:
@@ -192,7 +201,7 @@ def sync_repo(repo: dict, max_retries: int = 3) -> bool:
         "-c", f"url.git@{ssh_host}:.insteadOf=git@github.com:"
     ]
 
-    log(f"🔄 Синхронізація '{name}' ({account})...", Colors.CYAN)
+    log(f"   🔄 Синхронізація '{name}' ({account})...", Colors.CYAN)
     orig_dir = os.getcwd()
     try:
         os.chdir(local_path)
@@ -216,10 +225,10 @@ def sync_repo(repo: dict, max_retries: int = 3) -> bool:
 def sync_repos() -> None:
     global REPOS
     REPOS = load_sync_repos()
-    if not REPOS: log("⚠️ Список репозиторіїв порожній.", Colors.YELLOW); return
+    if not REPOS: log("   ⚠️ Список репозиторіїв порожній.", Colors.YELLOW); return
     cprint("-" * 50, Colors.BLUE); log("🔄 ГІТ СИНХРОНІЗАЦІЯ КАПСУЛИ", Colors.HEADER)
     success_count = sum(1 for repo in REPOS if sync_repo(repo))
-    log(f"✅ Завершено: {success_count}/{len(REPOS)}", Colors.GREEN if success_count == len(REPOS) else Colors.YELLOW)
+    log(f"   ✅ Синхронізація завершена: {success_count}/{len(REPOS)}", Colors.GREEN if success_count == len(REPOS) else Colors.YELLOW)
 
 # ===========================================================================
 # GIT UPDATE UTILS
@@ -314,7 +323,7 @@ def _read_clipboard() -> str:
         return subprocess.run([pwsh, "-NoProfile", "-Command", "Get-Clipboard"], capture_output=True, text=True).stdout.strip()
     except: return ""
 
-def _getpass_win(prompt: str = "Password: ") -> str:
+def _getpass_win(prompt: str = "🔑 Пароль: ") -> str:
     sys.stdout.write(prompt); sys.stdout.flush(); chars = []
     while True:
         ch = msvcrt.getwch()
@@ -335,29 +344,71 @@ def _bw_get_status(env: dict) -> str:
         return json.loads(res.stdout).get("status", "unauthenticated")
     except: return "unauthenticated"
 
-def get_password_from_vaultwarden() -> Optional[str]:
+def get_vaultwarden_token() -> tuple[Optional[str], dict]:
     ev = _parse_env_file()
-    if ev.get("GIT_BACKUP_PASSWORD"): return ev["GIT_BACKUP_PASSWORD"]
-    if not os.path.exists(BW_EXE) or not ev.get("BW_ITEM_NAME"): return None
+    if not os.path.exists(BW_EXE): return None, {}
     env = os.environ.copy(); env["BITWARDENCLI_APPDATA_DIR"] = os.path.join(os.path.dirname(BW_EXE), ".bw_data")
-    subprocess.run([BW_EXE, "config", "server", ev["BW_HOST"]], capture_output=True, env=env)
+    if ev.get("BW_HOST"): subprocess.run([BW_EXE, "config", "server", ev["BW_HOST"]], capture_output=True, env=env)
     status = _bw_get_status(env); token = None
     if status == "unlocked":
-        res = subprocess.run([BW_EXE, "unlock", "--raw"], capture_output=True, text=True, env=env);
+        res = subprocess.run([BW_EXE, "unlock", "--raw"], capture_output=True, text=True, env=env)
         if res.returncode == 0: token = res.stdout.strip()
     if not token:
-        cprint(f"   Vaultwarden ({ev['BW_EMAIL']}) locked. Встав пароль (Ctrl+V):", Colors.CYAN)
-        mp = _getpass_win("   Master Password: ")
-        if not mp: return None
+        log(f"   ℹ️  Vaultwarden ({ev.get('BW_EMAIL', 'Vault')}) заблоковано.", Colors.CYAN)
+        _auto_close.stop()
+        mp = _getpass_win("   🔑 Майстер-пароль Vaultwarden (тільки Ctrl+V): ")
+        _auto_close.reset()
+        _auto_close.start()
+        if not mp:
+            log("   ⚠️ Майстер-пароль не введено. Пропускаємо Vaultwarden.", Colors.YELLOW)
+            return None, env
         env["BW_PASSWORD"] = mp
         res = subprocess.run([BW_EXE, "unlock", "--passwordenv", "BW_PASSWORD", "--raw"], capture_output=True, text=True, env=env)
         if res.returncode == 0: token = res.stdout.strip()
     if token:
         subprocess.run([BW_EXE, "sync", "--session", token], capture_output=True, env=env)
-        get_res = subprocess.run([BW_EXE, "get", "item", ev["BW_ITEM_NAME"], "--session", token], capture_output=True, text=True, env=env)
-        if get_res.returncode == 0:
-            pw = json.loads(get_res.stdout).get("login", {}).get("password"); subprocess.run([BW_EXE, "lock"], capture_output=True, env=env); return pw
+    return token, env
+
+def get_password_from_vaultwarden(token: str, env: dict) -> Optional[str]:
+    ev = _parse_env_file()
+    if ev.get("GIT_BACKUP_PASSWORD"): return ev["GIT_BACKUP_PASSWORD"]
+    if not token or not ev.get("BW_ITEM_NAME"): return None
+    get_res = subprocess.run([BW_EXE, "get", "item", ev["BW_ITEM_NAME"], "--session", token], capture_output=True, text=True, env=env)
+    if get_res.returncode == 0:
+        return json.loads(get_res.stdout).get("login", {}).get("password")
     return None
+
+def extract_ssh_keys_from_vaultwarden(token: str, env: dict) -> bool:
+    ev = _parse_env_file()
+    if not token: return False
+    main_name = ev.get("BW_SSH_KEY_MAIN_ITEM", "Github Oleksii Rovnianskyi (oleksii-rovnianskyi)")
+    sec_name = ev.get("BW_SSH_KEY_SECURITY_ITEM", "Github Oleksii Rovnianskyi 0scorp919")
+    success = True
+    os.makedirs(os.path.dirname(SSH_KEY_MAIN), exist_ok=True)
+
+    for name, path in [(main_name, SSH_KEY_MAIN), (sec_name, SSH_KEY_SECURITY)]:
+        res = subprocess.run([BW_EXE, "get", "item", name, "--session", token], capture_output=True, text=True, env=env)
+        if res.returncode == 0:
+            item = json.loads(res.stdout)
+            key_val = None
+            for f in item.get("fields", []):
+                if f.get("name") == "SSH": key_val = f.get("value")
+            if key_val:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(key_val.replace("\\n", "\n") if "\\n" in key_val else key_val)
+                    if not key_val.endswith("\n"): f.write("\n")
+                log(f"   🔑 SSH ключ {name} завантажено.", Colors.GREEN)
+            else:
+                log(f"   ⚠️ Не знайдено поле 'SSH' у записі {name}.", Colors.YELLOW); success = False
+        else:
+            log(f"   ❌ Запис {name} не знайдено у Vaultwarden.", Colors.RED); success = False
+    return success
+
+def remove_ssh_keys() -> None:
+    for path in [SSH_KEY_MAIN, SSH_KEY_SECURITY]:
+        if os.path.exists(path):
+            try: os.remove(path); log(f"   🗑️  Видалено ключ: {os.path.basename(path)}", Colors.CYAN)
+            except: pass
 
 # ===========================================================================
 # BACKUP & PATH
@@ -370,11 +421,20 @@ def _rotate_backups() -> None:
 def manage_backups(password: str | None) -> None:
     cprint("-" * 50, Colors.BLUE); log("💾 РЕЗЕРВНА КОПІЯ GIT", Colors.HEADER)
     os.makedirs(BACKUP_ROOT, exist_ok=True); ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    path = os.path.join(BACKUP_ROOT, f"Git_Backup_{ts}.7z")
+    archive_name = f"Git_Backup_{ts}.7z"
+    path = os.path.join(BACKUP_ROOT, archive_name)
     cmd = [ZIP_EXE, "a", path, GIT_DIR, "-mx3", "-mmt=on", "-bso0"]
     if password: cmd.extend([f"-p{password}", "-mhe=on"])
-    log(f"   📦 Створення архіву: {os.path.basename(path)}...", Colors.CYAN)
-    subprocess.run(cmd, capture_output=True); _rotate_backups(); log("   ✅ Бекап завершено", Colors.GREEN)
+    log(f"   📦 Створення архіву: {archive_name}...", Colors.CYAN)
+    subprocess.run(cmd, capture_output=True)
+
+    try:
+        with open(path, 'rb') as f: file_hash = hashlib.sha256(f.read()).hexdigest()
+        with open(f"{path}.sha256", 'w', encoding='utf-8') as hf: hf.write(f"{file_hash} *{archive_name}\n")
+        log(f"   ✓ Створено SHA256 хеш: {file_hash[:8]}...", Colors.GREEN)
+    except Exception as e: log(f"   ⚠️ Не вдалося створити SHA256 хеш: {e}", Colors.YELLOW)
+
+    _rotate_backups(); log("   ✅ Бекап завершено", Colors.GREEN)
 
 def show_path_info() -> None:
     cprint("-" * 50, Colors.BLUE); log("🔧 ІНФОРМАЦІЯ ПРО PATH", Colors.HEADER)
@@ -395,22 +455,77 @@ def launch_git_bash() -> None:
     cprint("-" * 50, Colors.BLUE); log("🚀 Запуск Git Bash...", Colors.GREEN); gb = os.path.join(GIT_DIR, "git-bash.exe")
     if os.path.exists(gb): subprocess.Popen([gb, "--cd=" + USER_ROOT], creationflags=0x00000008 | 0x00000200, close_fds=True)
 
-def main():
-    os.system("cls"); print("\n"); cprint("=" * 60, Colors.HEADER); cprint(f"  🐙 MNT: {APP_NAME.upper()} (AUTO-PILOT v{__version__})", Colors.HEADER); cprint(f"     Hash: {get_manager_hash()}", Colors.BLUE); cprint("=" * 60 + "\n", Colors.HEADER)
+def main() -> int:
+    import argparse
+    parser = argparse.ArgumentParser(description=f"Manager for {APP_NAME}")
+    parser.add_argument("-k", "--keep-open", action="store_true", help="Keep window open after completion")
+    parser.add_argument("--sync", action="store_true", help="Run sync only")
+    args, _ = parser.parse_known_args()
+
+    os.system('cls' if os.name == 'nt' else 'clear')
+    print("\n")
+    cprint("=" * 50, Colors.HEADER)
+    cprint(f"🚀 MNT: {APP_NAME.upper()} (AUTO-PILOT v{__version__})", Colors.HEADER)
+    cprint(f"   Hash: {get_manager_hash()}", Colors.BLUE)
+    cprint("=" * 50 + "\n", Colors.HEADER)
+
     _auto_close.start()
     try:
-        ensure_in_system_path(); cleanup_old_logs(7)
-        if "--sync" in sys.argv: sync_repos(); return
-        if not all(health_check().values()): log("⚠️ КОМПОНЕНТИ ВІДСУТНІ", Colors.YELLOW)
-        pw = get_password_from_vaultwarden(); manage_backups(pw); sync_repos()
-        cprint("-" * 50, Colors.BLUE); log("🌍 ПЕРЕВІРКА ОНОВЛЕННЯ", Colors.HEADER)
-        iv = get_installed_version(); log(f"   Встановлено: {iv}", Colors.CYAN); lt, url = get_latest_version_github(); log(f"   Остання:     {lt}", Colors.CYAN)
-        if version.parse(normalize_version(lt)) > version.parse(normalize_version(iv)): update_git(url, lt)
-        else: log("   ✅ Оновлення не потрібне", Colors.GREEN)
-        launch_git_bash(); log("\nГотово!", Colors.GREEN)
-    except Exception as e: error_reporting(e, "main")
-    finally: _auto_close.stop()
-    elapsed = time.time() - START_TIME; cprint(f"\n⏱️  Час виконання: {elapsed:.1f} сек", Colors.BLUE)
-    for i in range(30, 0, -1): sys.stdout.write(f"\r{Colors.CYAN}Автозакриття через {i} с...{Colors.RESET}"); sys.stdout.flush(); time.sleep(1)
+        ensure_in_system_path()
 
-if __name__ == "__main__": main()
+        checks = health_check()
+        if not all(checks.values()): log("⚠️ Деякі перевірки не пройдено", Colors.YELLOW)
+
+        cleanup_old_logs(7)
+
+        token, v_env = get_vaultwarden_token()
+
+        if args.sync:
+            try:
+                if extract_ssh_keys_from_vaultwarden(token, v_env): sync_repos()
+            finally: remove_ssh_keys()
+        else:
+            pw = get_password_from_vaultwarden(token, v_env); manage_backups(pw)
+
+            cprint("-" * 50, Colors.BLUE); log("🌍 ПЕРЕВІРКА ОНОВЛЕННЯ", Colors.HEADER)
+            iv = get_installed_version(); log(f"   Встановлена: {iv}", Colors.CYAN); lt, url = get_latest_version_github(); log(f"   Остання:     {lt}", Colors.CYAN)
+            if version.parse(normalize_version(lt)) > version.parse(normalize_version(iv)): update_git(url, lt)
+            else: log("   ✅ Оновлення не потрібне", Colors.GREEN)
+
+            try:
+                if extract_ssh_keys_from_vaultwarden(token, v_env): sync_repos()
+            finally:
+                remove_ssh_keys()
+
+            launch_git_bash()
+
+        log("Готово!", Colors.GREEN)
+
+    except KeyboardInterrupt:
+        log("\n⚠️ Перервано користувачем", Colors.YELLOW)
+        return 1
+    except Exception as e:
+        error_reporting(e, "main")
+        return 1
+    finally:
+        _auto_close.stop()
+        elapsed = time.time() - START_TIME
+        cprint("-" * 50, Colors.BLUE)
+        cprint(f"⏱️  Час виконання: {elapsed:.1f} сек", Colors.BLUE)
+        print("\n")
+
+    if args.keep_open:
+        cprint("\n[INFO] Режим --keep-open активовано. Вікно залишиться відкритим.", Colors.CYAN)
+        input("Натисніть Enter для виходу...")
+    else:
+        for i in range(30, 0, -1):
+            sys.stdout.write(f"\r{Colors.CYAN}Автозакриття через {i} с... {Colors.RESET}")
+            sys.stdout.flush()
+            time.sleep(1)
+        sys.stdout.write(f"\r{Colors.CYAN}Автозакриття через 0 с...  {Colors.RESET}   \n")
+        sys.stdout.flush()
+
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
